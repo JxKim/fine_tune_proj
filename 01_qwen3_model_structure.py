@@ -25,6 +25,7 @@ class Qwen3Model(nn.Module):
         self.tok_emb = nn.Embedding(cfg["vocab_size"], cfg["emb_dim"], dtype=cfg["dtype"])
 
         # transformer block
+        # nn.ModuleList：model.parameter()会自动注册参数
         self.trf_blocks = nn.ModuleList(  
             [TransformerBlock(cfg) for _ in range(cfg["n_layers"])]
         )
@@ -55,20 +56,21 @@ class Qwen3Model(nn.Module):
         x = tok_embeds
 
         num_tokens = x.shape[1]
-        if cache is not None:
+        if cache is not None: # decode阶段
             pos_start = self.current_pos
             pos_end = pos_start + num_tokens
             self.current_pos = pos_end
             mask = torch.triu(
                 torch.ones(pos_end, pos_end, device=x.device, dtype=torch.bool), diagonal=1
             )[pos_start:pos_end, :pos_end]
-        else:
+        else: # prefill阶段
             pos_start = 0  
             mask = torch.triu(
                 torch.ones(num_tokens, num_tokens, device=x.device, dtype=torch.bool), diagonal=1
             )
         
-        mask = mask[None, None, :, :]
+        # 扩展mask到batch_size,num_heads,num_tokens,num_tokens
+        mask = mask.unsqueeze(0).unsqueeze(0)
 
         for i, block in enumerate(self.trf_blocks):
             blk_cache = cache.get(i) if cache else None
@@ -212,11 +214,28 @@ class GroupedQueryAttention(nn.Module):
 def compute_rope_params(head_dim, theta_base=10_000, context_length=4096, dtype=torch.float32):
     """
     计算每个位置的余弦值和正弦值，用于旋转位置编码
+    head_dim假设等于8：
+    [0,1,2,3,4,5,6,7]
+    文档里面一组小向量：[0,1],[2,3],[4,5],[6,7]
+    我们这里的实现：[0,4],[1,5],[2,6],[3,7]
     """
     assert head_dim % 2 == 0, "Embedding dimension must be even"
 
-    # Compute the inverse frequencies
-    inv_freq = 1.0 / (theta_base ** (torch.arange(0, head_dim, 2, dtype=dtype)[: (head_dim // 2)].float() / head_dim))
+    # 1. 生成偶数下标：0, 2, 4, ..., head_dim-2
+    freq_indices = torch.arange(0, head_dim, 2, dtype=dtype)
+
+    # 2. 只保留前 head_dim//2 个
+    freq_indices = freq_indices[: head_dim // 2]
+
+    # 3. 转成浮点，并除以 head_dim，得到指数
+    exponents = freq_indices.float() / head_dim
+
+    # 4. 计算 theta_base 的这些指数次幂
+    scales = theta_base ** exponents
+
+    # 5. 取倒数，得到 inverse frequencies
+    inv_freq = 1.0 / scales
+
 
     # 计算位置索引：[0,1,2,3,...,context_length-1] shape: (context_length,)
     positions = torch.arange(context_length, dtype=dtype)
@@ -225,14 +244,19 @@ def compute_rope_params(head_dim, theta_base=10_000, context_length=4096, dtype=
     # positions.unsqueeze(1): (context_length,1)
     # inv_freq.unsqueeze(0): (1,head_dim // 2)
     # angles: (context_length, head_dim // 2)
+    # angles[0,0]=序列中第0个位置处，第0组分量的旋转角度
+    # angles:[[ange_0],[angle_1],[angle_2],[angle_3]]
     angles = positions.unsqueeze(1) * inv_freq.unsqueeze(0)  # Shape: (context_length, head_dim // 2)
 
     # 将angles扩展到head_dim维度，shape: (context_length, head_dim)
     angles = torch.cat([angles, angles], dim=1)  # Shape: (context_length, head_dim)
+    # 拼完之后：[[ange_0],[angle_1],[angle_2],[angle_3],[ange_0],[angle_1],[angle_2],[angle_3]]
+    # 不是这样[[angle_0],[angle_0],]
+    # angles[0,1] = 序列当中第0个位置处，第1个分量的角度值
 
     # 预计算每个角度的余弦值和正弦值
-    cos = torch.cos(angles)
-    sin = torch.sin(angles)
+    cos = torch.cos(angles) # 得到序列当中每个位置，每个分量的余弦值
+    sin = torch.sin(angles) # 得到序列当中每个位置，每个分量的正弦值
 
     return cos, sin
 

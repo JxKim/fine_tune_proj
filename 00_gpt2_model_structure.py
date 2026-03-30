@@ -3,7 +3,6 @@ import tiktoken
 import torch
 import torch.nn as nn
 
-
 class MultiHeadAttention(nn.Module):
     """多头注意力"""
     def __init__(self, d_in, d_out, context_length, dropout, num_heads, qkv_bias=False):
@@ -88,9 +87,25 @@ class MultiHeadAttention(nn.Module):
         num_tokens_K = keys.shape[-2]
         if use_cache:
             # 用 cache 时，K 包含历史，Q 是当前新来的 token，所以行不能再从 0 开始切，要从 ptr_current_pos 开始切
+            # 第一次输入整个prompt，假设seq_len = 20：预填充prefill，self.ptr_current_pos = 0, num_tokens_Q = 20
+            # num_tokens_k = 20
+            # self.mask.bool():
+        # tensor([[False., True., True.,  ..., True., True., True.],
+        #         [False., False., True.,  ..., True., True., True.],
+        #         [False., False., False.,  ..., True., True., True.],
+        #         ...,
+        #         [0., 0., 0.,  ..., 0., 1., 1.],
+        #         [0., 0., 0.,  ..., 0., 0., 1.],
+        #         [0., 0., 0.,  ..., 0., 0., 0.]])
+        # 通过切片，prefill阶段，取前20行，前20列的mask_bool
+
+            # 后面的单个token前向传播阶段：Decode(这个概念是和prefill对应的，这是KV Cache里面的两个概念)
+            # self.ptr_current_pos = 20, num_tokens_Q = 1,num_tokens_K=21
+            # mask_bool : 从self.mask里面取第20行，前21列的mask_bool
             mask_bool = self.mask.bool()[
                 self.ptr_current_pos:self.ptr_current_pos + num_tokens_Q, :num_tokens_K
             ]
+            # ptr_current_pos更新，这个表示当前处理到的位置
             self.ptr_current_pos += num_tokens_Q
         # 不用cache时，直接获取num_tokens_Q个token的mask_bool
         else:
@@ -99,6 +114,13 @@ class MultiHeadAttention(nn.Module):
         # 把未来位置置成 -inf
         # w_11,负无穷。。。
         # w_21,w_22,负无穷，负无穷。。。 
+        # 第一行 [False, True, True, ..., True, True, True]
+        # 填充完：[0.12,-inf,...,-inf,-inf,-inf]
+
+        # 第二行：[False,False,True,...,True,True,True]
+        # 填充完：[0.12,0.34,...,-inf,-inf,-inf,-inf]
+        # ... 以此实现了带掩码的自注意力机制
+        # decode阶段：取第21行，前21列:[False , False, False,....  False]
         attn_scores.masked_fill_(mask_bool, -torch.inf)
         # 
         attn_weights = torch.softmax(attn_scores / keys.shape[-1]**0.5, dim=-1)
@@ -145,7 +167,6 @@ class FeedForward(nn.Module):
 
     def forward(self, x):
         return self.layers(x)
-
 
 # Transformer Block层：
 class TransformerBlock(nn.Module):
