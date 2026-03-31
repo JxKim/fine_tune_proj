@@ -38,3 +38,4 @@
    37  uv run 02_sft_train.py --batch_size 2 --train_data_size 30000
    38  clear
    39  history
+   40  uv pip install transformers==5.4.0 -i https://pypi.tuna.tsinghua.edu.cn/simple
