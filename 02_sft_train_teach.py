@@ -2,7 +2,7 @@
 手写SFT训练脚本
 """
 from typing import Dict, List
-from sympy import Sum
+import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 import torch
 from transformers import PreTrainedTokenizerFast
@@ -147,7 +147,7 @@ def _set_answer_masks(mask,user_ends,assistant_ends):
     21天培养法，每天坚持xxx<|im_end|>
 
     假设第一个eos_token_id index为5，第二个为10，第三个为15，第四个为20，第五个为25，
-    那么user_turns:[11,21]，assistant_ends:[16,26]
+    那么user_ends:[11,21]，assistant_ends:[16,26]
 
     user_ends当中的索引指向的是<|im_end|>之后的\n的索引，
     assistant_ends当中的索引指向的是<|im_end|>之后的\n的索引，
@@ -267,6 +267,7 @@ def train(model,tokenizer,config:SFTConfig):
 
     import tqdm
     progress_bar = tqdm.tqdm(total=num_steps)
+    train_step_losses = []
     pad_token_id = tokenizer.pad_token_id
     for step in range(num_steps):
         # 1、获取当前批次数据，并进行padding处理
@@ -301,13 +302,75 @@ def train(model,tokenizer,config:SFTConfig):
 
         # 7、反向传播
         loss.backward()
+        progress_bar.update(1)
+        progress_bar.set_postfix({"loss":loss.item()})
+        train_step_losses.append(loss.item())
 
         # 8、学习率更改
+        current_learning_rate = cosine_decay(
+            current_step=step,
+            warmup_ratio = config.warmup_ratio,
+            min_learning_rate = config.min_learing_rate,
+            max_learning_rate = config.max_learning_rate,
+            total_steps=num_steps
+        )
+
+        for param_group in optimizer.param_groups:
+            param_group["lr"] = current_learning_rate
         
         optimizer.step()
         optimizer.zero_grad()
 
+        # 将日志写入到writer中
+        should_log = step % config.log_iter == 0 or step == num_steps - 1
+        if should_log:
+            # log 最近log_iter步平均损失
+            average_loss = train_step_losses[-config.log_iter:]
+            writer.add_scalar("train_loss",np.mean(average_loss),step)
 
+
+def cosine_decay(current_step:int,warmup_ratio:float,min_learning_rate:float,max_learning_rate:float,total_steps:int)->float:
+    """
+    余弦衰减学习率函数
+    """
+    import numpy as np
+    warmup_steps = warmup_ratio * total_steps
+    if current_step < warmup_steps:
+        return min_learning_rate + (max_learning_rate - min_learning_rate) * current_step / warmup_steps
+    else:
+        progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
+        decay = 0.5 * (1 + np.cos(np.pi * progress))
+        return min_learning_rate + (max_learning_rate - min_learning_rate) * decay
+
+
+def test_answer_mask():
+    """
+    测试掩码机制
+    """
+    message_list = [
+        {"role":"system","content":"你是一个专业的翻译助手"},
+        {"role":"user","content":"你好，你是谁"},
+        {"role":"assistant","content":"我是一个翻译助手，我能为你做什么？"},
+    ]
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B-Base")
+    res = tokenizer.apply_chat_template(message_list,add_generation_prompt=False,tokenize=False)
+    print("------1、使用chat template之后的结果为")
+    print(repr(res)) # 调用repr函数，就是把里面\n给我们打印出来
+    print("-----------------\n\n")
+
+    res_token_ids = tokenizer.apply_chat_template(message_list,add_generation_prompt=False,tokenize=True)
+    print(res_token_ids)
+    print("------2、使用chat template之后的token_ids为")
+    for token in res_token_ids["input_ids"]:
+        print('token_id为',token,"；token为",repr(tokenizer.decode(token)))
+    print("-----------------\n\n")
+    print("------3、使用create_answer_mask之后的token_ids为")
+    token_id_tensor = torch.tensor([res_token_ids["input_ids"][:-1]],device="cuda",dtype=torch.long)
+    assistant_answer_mask = create_answer_mask(token_id_tensor,tokenizer)
+    assistant_answer_mask_list = assistant_answer_mask.tolist()[0]
+    for token_id,mask in zip(res_token_ids["input_ids"][:-1],assistant_answer_mask_list):
+        print('token_id为',token_id,"；token为",repr(tokenizer.decode(token_id)),"；mask为",mask)
 
 if __name__=="__main__":
-    test_gather_demo()
+    test_answer_mask()

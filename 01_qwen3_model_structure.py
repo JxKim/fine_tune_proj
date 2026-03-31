@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 from pathlib import Path
+from transformers.models.qwen3.modeling_qwen3 import Qwen3ForCausalLM
 import re
 # 0.6 billion parameters
 QWEN_CONFIG_06_B = {
@@ -62,6 +63,7 @@ class Qwen3Model(nn.Module):
             self.current_pos = pos_end
             mask = torch.triu(
                 torch.ones(pos_end, pos_end, device=x.device, dtype=torch.bool), diagonal=1
+                #pos_start=20,pos_end=21，取一行，
             )[pos_start:pos_end, :pos_end]
         else: # prefill阶段
             pos_start = 0  
@@ -109,12 +111,14 @@ class TransformerBlock(nn.Module):
         # 保存输入，用于后面进行残差连接（GQA的残差连接）
         shortcut = x
         x = self.norm1(x)
+        # attention
         x, next_cache = self.att(x, mask, cos, sin, start_pos=start_pos, cache=cache)  # Shape [batch_size, num_tokens, emb_size]
         x = x + shortcut  # 进行残差连接
 
         # 保存输入，用于后面进行残差连接（FFN的残差连接）
         shortcut = x
         x = self.norm2(x)
+        # FFN
         x = self.ff(x)
         x = x + shortcut  # 进行残差连接
 
@@ -158,6 +162,7 @@ class GroupedQueryAttention(nn.Module):
         self.W_key = nn.Linear(d_in, num_kv_groups * head_dim, bias=False, dtype=dtype)
         self.W_value = nn.Linear(d_in, num_kv_groups * head_dim, bias=False, dtype=dtype)
 
+        # 输出投影层：融合多头信息
         self.out_proj = nn.Linear(self.d_out, d_in, bias=False, dtype=dtype)
 
         if qk_norm:
@@ -192,6 +197,7 @@ class GroupedQueryAttention(nn.Module):
 
         if cache is not None:
             prev_k, prev_v = cache
+            # 把算出来的新的key和value和前面token的k和v拼起来
             keys = torch.cat([prev_k, keys_new], dim=2)
             values = torch.cat([prev_v, values_new], dim=2)
         else:
@@ -205,6 +211,7 @@ class GroupedQueryAttention(nn.Module):
 
         # 注意力得分计算
         attn_scores = queries @ keys.transpose(2, 3)
+        # 需要对score做掩码，使得每个token只能关注前面的token
         attn_scores = attn_scores.masked_fill(mask, -torch.inf)
         attn_weights = torch.softmax(attn_scores / self.head_dim**0.5, dim=-1)
 
@@ -294,10 +301,15 @@ def apply_rope(x, cos, sin, offset=0):
 
     # 应用旋转变换
     rotated = torch.cat((-x2, x1), dim=-1) # Shape: (batch_size, num_heads,seq_len, head_dim)
-    # x*cos = [x1*cos ,x2*cos]
-    # rotated*sin = [-x2*sin ,x1*sin]
-    # x_rotated = [x1*cos-x2*sin, x1*sin+x2*cos]
-    # 旋转矩阵 [cos, -sin; sin, cos], x_rotated = [x1,x2]*旋转矩阵
+    # 二维旋转公式：原来的向量[a,b] ,旋转后的向量[a', b'] = [a cos - b sin, a sin + b cos]
+    # 写成向量形式，就是：[a, b] * cos + [-b, a] * sin=[acos-bsin,bcos+asin]
+    # 以(x0, x4)举例，旋转后会变成：
+    # x0' = x0 * cos - x4 * sin
+    # x4' = x0 * sin + x4 * cos
+    # 同理：
+
+    # x1' = x1 * cos - x5 * sin
+    # x5' = x1 * sin + x5 * cos
     x_rotated = (x * cos) + (rotated * sin)
 
     # 返回旋转后的x
