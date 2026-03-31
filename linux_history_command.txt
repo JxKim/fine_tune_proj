@@ -1,0 +1,40 @@
+(sft_train) root@autodl-container-e7f94cb009-1a84dd0f:~/autodl-tmp/sft_train# history
+    1  cd autodl-tmp/
+    2  mkdir sft_train
+    3  pip install uv
+    4  cd sft_train/
+    5  uv venv
+    6  source .venv/bin/activate
+    7  uv pip modelscope
+    8  uv pip install modelscope
+    9  source /etc/network_turbo 
+   10  uv pip install modelscope
+   11  modelscope download --model Qwen/Qwen3-0.6B-Base --local_dir ./model/Qwen3-0.6B-Base
+   12  cleaar
+   13  clear
+   14  uv pip install transformers==5.2.0
+   15  uv pip install torch==2.10.0+cu128
+   16  uv pip install torch==2.10.0+cu128 -i https://download.pytorch.org/whl/cu128
+   17  uv pip install datasets
+   18  uv pip show transformers
+   19  modelscope download --dataset HuggingFaceH4/ultrachat_200k --local_dir ./data/ultrachat_200k
+   20  clear
+   21  history
+   22  uv run 02_sft_train.py 
+   23  uv pip install tensorboard
+   24  uv run 02_sft_train.py 
+   25  history
+   26  clear
+   27  uv run 02_sft_train.py 
+   28  clear
+   29  uv run 02_sft_train.py 
+   30  nvidia-smi
+   31  uv run 02_sft_train.py --help
+   32  uv run 02_sft_train.py --batch_size 4
+   33  uv run 02_sft_train.py --batch_size 4 --train_data_size 1000
+   34  clear
+   35  uv run 02_sft_train.py --batch_size 2 --train_data_size 1000
+   36  clear
+   37  uv run 02_sft_train.py --batch_size 2 --train_data_size 30000
+   38  clear
+   39  history
