@@ -393,6 +393,7 @@ def main():
     parser.add_argument("--batch_size",type=int,default=6)
     parser.add_argument("--train_data_size",type=int,default=10000)
     parser.add_argument("--log_dir",type=str)
+    parser.add_argument("--output_dir",type=str)
 
     args = parser.parse_args()
 
