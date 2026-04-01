@@ -256,6 +256,7 @@ class GPTModel(nn.Module):
     def forward(self, in_idx, use_cache=False):
         # seq_len:20
         batch_size, seq_len = in_idx.shape
+        # batch_size,seq_len,emb_dim
         tok_embeds = self.tok_emb(in_idx)
 
         if use_cache:
