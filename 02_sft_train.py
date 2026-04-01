@@ -317,6 +317,8 @@ def train(model,tokenizer,config:SFTConfig):
             total_steps=num_steps
         )
 
+        writer.add_scalar("learning_rate",current_learning_rate,step)
+
         for param_group in optimizer.param_groups:
             param_group["lr"] = current_learning_rate
         
@@ -343,7 +345,6 @@ def cosine_decay(current_step:int,warmup_ratio:float,min_learning_rate:float,max
         progress = (current_step - warmup_steps) / (total_steps - warmup_steps)
         decay = 0.5 * (1 + np.cos(np.pi * progress))
         return min_learning_rate + (max_learning_rate - min_learning_rate) * decay
-
 
 def test_answer_mask():
     """
