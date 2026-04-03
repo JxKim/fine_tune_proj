@@ -55,15 +55,16 @@ config = SFTConfig(
     per_device_train_batch_size = 3,
     gradient_accumulation_steps = 4,
     learning_rate = 2e-5,
-    max_steps = 3000,
+    # max_steps = 3000,
     # 日志
     logging_steps = 100,
+    num_train_epochs=1,
     
     report_to = ["tensorboard"],
     # 显存优化相关:
     bf16=True, # 混合精度
     gradient_checkpointing=True, # 梯度检查点
-    activation_offloading = False, # CPU 卸载
+    activation_offloading = False, # CPU 卸载2
     # 保存相关
     save_strategy = "steps",
     save_steps = 300,
