@@ -9,9 +9,9 @@ bnb_config = BitsAndBytesConfig(
 
 # 2、加载模型时传入BitsAndBytesConfig对象
 from transformers import AutoModelForCausalLM,AutoTokenizer
-quantized_model = AutoModelForCausalLM.from_pretrained("model/Qwen3-0.6B-Base",quantization_config=bnb_config)
-model = AutoModelForCausalLM.from_pretrained("model/Qwen3-0.6B-Base")
-tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B-Base")
+quantized_model = AutoModelForCausalLM.from_pretrained("model/Qwen3-8B",quantization_config=bnb_config)
+model = AutoModelForCausalLM.from_pretrained("model/Qwen3-8B")
+tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-8B")
 
 from peft import prepare_model_for_kbit_training
 quantized_model = prepare_model_for_kbit_training(quantized_model)
@@ -32,7 +32,7 @@ peft_config = LoraConfig(
 from trl.trainer.sft_trainer import SFTTrainer
 from trl.trainer.sft_config import SFTConfig
 import os
-os.environ["TENSORBOARD_LOGGING_DIR"] = "logs/Qwen3-0.6B-SFT"
+os.environ["TENSORBOARD_LOGGING_DIR"] = "logs/Qwen3-8B-QLoRA"
 # 2、加载数据集
 from datasets import load_dataset
 dataset = load_dataset("json",data_files={"train":"data/keywords_data_train.jsonl","test":"data/keywords_data_test.jsonl"})
@@ -51,7 +51,7 @@ remove_list = list(dataset["train"][0].keys())
 dataset = dataset.map(map_to_sft_format,batched=False,remove_columns=remove_list)
 # 5、构造SFTConfig对象
 config = SFTConfig(
-    output_dir = "finetuned/Qwen3-0.6B-trl-sft",
+    output_dir = "finetuned/Qwen3-8B-QLoRA",
     per_device_train_batch_size = 3,
     gradient_accumulation_steps = 4,
     learning_rate = 2e-5,
@@ -94,4 +94,4 @@ trainer = SFTTrainer(
 
 trainer.train()
 # 此时保存的就是AB矩阵，而不是原模型的所有的参数
-trainer.save_model("finetuned/Qwen3-0.6B-SFT-Lora-Adapter")
+trainer.save_model("finetuned/Qwen3-8B-QLoRA")
