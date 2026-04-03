@@ -1,80 +1,97 @@
-from transformers import AutoModelForCausalLM,AutoTokenizer,BitsAndBytesConfig
-import torch
-from peft import prepare_model_for_kbit_training
-from datasets import load_dataset
-from trl.trainer.sft_config import SFTConfig
-from trl.trainer.sft_trainer import SFTTrainer
-from peft import LoraConfig
-from transformers import TrainerCallback
-from torch.utils.tensorboard import SummaryWriter
-import torch
-from transformers import TrainerCallback
-import torch
-from transformers import TrainerCallback
-import os
-os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs/Qwen3-8B-SFT-QLoRA"
+# 1、构建一个BitsAndBytesConfig对象
+from transformers import BitsAndBytesConfig
 
-quantization_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
-    bnb_4bit_compute_dtype=torch.bfloat16,
+bnb_config = BitsAndBytesConfig(
+    load_in_4bit=True, # 使用4bit量化加载
+    bnb_4bit_quant_type="nf4", # 使用nf4量化类型
+    bnb_4bit_use_double_quant=False, # 基于实际环境来决定是否需要开启双重量化，开启后，会让反量化过程得到的数值精度更低，但是能够让占用的显存更少
 )
 
-model_name = "model/Qwen3-8B"
-model = AutoModelForCausalLM.from_pretrained(model_name,quantization_config=quantization_config) 
-model = prepare_model_for_kbit_training(model)
-tokenizer = AutoTokenizer.from_pretrained(model_name)
-torch.cuda.empty_cache()
-dataset_dict = load_dataset('json',data_files={"train":"data/keywords_data_train.jsonl","test":"data/keywords_data_test.jsonl"})
+# 2、加载模型时传入BitsAndBytesConfig对象
+from transformers import AutoModelForCausalLM,AutoTokenizer
+quantized_model = AutoModelForCausalLM.from_pretrained("model/Qwen3-0.6B-Base",quantization_config=bnb_config)
+model = AutoModelForCausalLM.from_pretrained("model/Qwen3-0.6B-Base")
+tokenizer = AutoTokenizer.from_pretrained("model/Qwen3-0.6B-Base")
 
-def map_func(example):
-    conversation = example["conversation"]
+from peft import prepare_model_for_kbit_training
+quantized_model = prepare_model_for_kbit_training(quantized_model)
 
-    messages = []
-
-    for item in conversation:
-        messages.append({"role":"user","content":item["human"]})
-        messages.append({"role":"assistant","content":item["assistant"]})
-   
-    return {"messages":messages}
-
-dataset_dict = dataset_dict.map(function=map_func,batched=False,remove_columns=["dataset","conversation","category","conversation_id"])
-
+# 1、引入Peft
+from peft import LoraConfig
+# 2、构建一个config对象
 peft_config = LoraConfig(
-    r = 8,
-    lora_alpha=8,
+    r  = 8,
+    lora_alpha= 8,
     lora_dropout=0.05,
     bias="none",
-    target_modules="all-linear",
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     task_type="CAUSAL_LM"
 )
 
-training_args = SFTConfig( 
-    output_dir="./finetuned/Qwen3-8B-SFT-QLoRA",
-    per_device_train_batch_size=4,
-    gradient_accumulation_steps=3,
-    num_train_epochs=1,
-    learning_rate=5e-5, 
-    logging_steps=100,
-    save_steps=100,
-    save_total_limit=2,
-    eval_strategy="steps",
-    eval_steps=100,
+# 1、引入sft trainer
+from trl.trainer.sft_trainer import SFTTrainer
+from trl.trainer.sft_config import SFTConfig
+import os
+os.environ["TENSORBOARD_LOGGING_DIR"] = "logs/Qwen3-0.6B-SFT"
+# 2、加载数据集
+from datasets import load_dataset
+dataset = load_dataset("json",data_files={"train":"data/keywords_data_train.jsonl","test":"data/keywords_data_test.jsonl"})
+# 3、定义一个map函数，将数据集中的每个样本，转换成SFTTrainer支持的格式
+def map_to_sft_format(example):
+    conversation = example["conversation"]
+    message_list = []
+    for conv in conversation:
+        for key ,value in conv.items():
+            key = "user" if key == "human" else key
+            message_list.append({"role":key,"content":value})
+
+    return {"messages":message_list}
+# 4、对dataset 进行转换
+remove_list = list(dataset["train"][0].keys())
+dataset = dataset.map(map_to_sft_format,batched=False,remove_columns=remove_list)
+# 5、构造SFTConfig对象
+config = SFTConfig(
+    output_dir = "finetuned/Qwen3-0.6B-trl-sft",
+    per_device_train_batch_size = 3,
+    gradient_accumulation_steps = 4,
+    learning_rate = 2e-5,
+    max_steps = 3000,
+    # 日志
+    logging_steps = 100,
+    
+    report_to = ["tensorboard"],
+    # 显存优化相关:
+    bf16=True, # 混合精度
+    gradient_checkpointing=True, # 梯度检查点
+    activation_offloading = False, # CPU 卸载
+    # 保存相关
+    save_strategy = "steps",
+    save_steps = 300,
+    # 评估相关
+    eval_steps = 300,
+    eval_strategy = "steps",
+    metric_for_best_model = "eval_loss",
     load_best_model_at_end=True,
-    bf16=True,
-    warmup_steps=0.1,
-    report_to=["tensorboard"]
+    greater_is_better = False,
+    max_length = 2500,
+    
+    chat_template_path="chat_template.jinja",
+    assistant_only_loss=True
 )
 
+# 6、构造SFTTrainer对象
+from transformers import AutoModelForCausalLM,AutoTokenizer
+for name,module in model.named_modules():
+    print(name,module)
 trainer = SFTTrainer(
-    model=model,
-    args=training_args,
-    train_dataset=dataset_dict["train"],
-    eval_dataset=dataset_dict["test"],
-    processing_class=tokenizer,
+    model = quantized_model,
+    processing_class = tokenizer,
+    args = config,
+    train_dataset= dataset["train"],
+    eval_dataset=dataset["test"],
     peft_config=peft_config
 )
 
 trainer.train()
-trainer.save_model("./finetuned/Qwen3-8B-SFT-QLoRA")
+# 此时保存的就是AB矩阵，而不是原模型的所有的参数
+trainer.save_model("finetuned/Qwen3-0.6B-SFT-Lora-Adapter")
